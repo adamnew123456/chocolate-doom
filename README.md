@@ -1,3 +1,49 @@
+# What is this?
+
+This is Doom VNC, a patch on top of Chocolate Doom which replaces the native AV
+and input support via SDL with a VNC server, so that you can connect to and play
+Doom over a network without having to have the game available locally.
+
+# Why?
+
+I've been looking to do something with the VNC protocol for a while after coming
+across RFC 6143. Since Doom uses software rendering and has an IO system that's
+fairly easy to swap out, it's a good fit for doing something weird like this.
+
+# Is it playable?
+
+Yes! Well, assuming you can get it to build - I've only tested this on Linux
+x64, although the socket APIs should work reasonably well across anything
+Unix-like. When you launch the chocolate-doom executable it will bind to the
+second VNC display (port 5902). As long as you have a VNC viewer you can connect
+and play it.
+
+# What are the bandwidth requirements?
+
+It depends on the connection mode your VNC client is using. Most of them will
+have at least two - a "high quality" and "low quality" mode. By default they
+will use high quality when running from localhost, for remote machines it depends
+on your settings.
+
+Here "high quality" is the VNC RAW encoding, which essentially dumps out Doom's
+framebuffer onto the network for each redraw request. Even at only 320x200,
+that's about 1.5 MB/s if you're playing at a decent frame rate. "Low quality" is
+the Tight encoding, which is more compact and uses about 100 KB/s.
+
+If you're interested in the details, I encourage you to read SendRawVNCFrame and
+SendTightVNCFrame in i_vnc.c. Tight is by far the more efficient encoding because
+we can use Doom's native palettes with it instead of 32-bit colors, but it's also
+zlib based and I had to add support for creating zlib frames without any underlying 
+compression (RFC 1950 and 1951 are your friends here).
+
+# Ugh! Why does only <some key> not work?
+
+Blame RFC 6143. It exposes keys in the form of keysyms instead of the scancodes
+that Doom is used to ingesting, so I had to add some mapping to get from the one
+format to the other. It's entirely possible I missed a mapping.
+
+----
+
 # Chocolate Doom
 
 Chocolate Doom aims to accurately reproduce the original DOS version of
