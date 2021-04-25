@@ -18,8 +18,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "SDL_mixer.h"
-
 #include "config.h"
 #include "doomtype.h"
 
@@ -267,45 +265,15 @@ void I_InitSound(boolean use_sfx_prefix)
 
 void I_ShutdownSound(void)
 {
-    if (sound_module != NULL)
-    {
-        sound_module->Shutdown();
-    }
-
-    if (music_packs_active)
-    {
-        music_pack_module.Shutdown();
-    }
-
-    if (music_module != NULL)
-    {
-        music_module->Shutdown();
-    }
 }
 
 int I_GetSfxLumpNum(sfxinfo_t *sfxinfo)
 {
-    if (sound_module != NULL)
-    {
-        return sound_module->GetSfxLumpNum(sfxinfo);
-    }
-    else
-    {
-        return 0;
-    }
+    return 0;
 }
 
 void I_UpdateSound(void)
 {
-    if (sound_module != NULL)
-    {
-        sound_module->Update();
-    }
-
-    if (active_music_module != NULL && active_music_module->Poll != NULL)
-    {
-        active_music_module->Poll();
-    }
 }
 
 static void CheckVolumeSeparation(int *vol, int *sep)
@@ -331,52 +299,24 @@ static void CheckVolumeSeparation(int *vol, int *sep)
 
 void I_UpdateSoundParams(int channel, int vol, int sep)
 {
-    if (sound_module != NULL)
-    {
-        CheckVolumeSeparation(&vol, &sep);
-        sound_module->UpdateSoundParams(channel, vol, sep);
-    }
 }
 
 int I_StartSound(sfxinfo_t *sfxinfo, int channel, int vol, int sep, int pitch)
 {
-    if (sound_module != NULL)
-    {
-        CheckVolumeSeparation(&vol, &sep);
-        return sound_module->StartSound(sfxinfo, channel, vol, sep, pitch);
-    }
-    else
-    {
-        return 0;
-    }
+    return 0;
 }
 
 void I_StopSound(int channel)
 {
-    if (sound_module != NULL)
-    {
-        sound_module->StopSound(channel);
-    }
 }
 
 boolean I_SoundIsPlaying(int channel)
 {
-    if (sound_module != NULL)
-    {
-        return sound_module->SoundIsPlaying(channel);
-    }
-    else
-    {
-        return false;
-    }
+    return false;
 }
 
 void I_PrecacheSounds(sfxinfo_t *sounds, int num_sounds)
 {
-    if (sound_module != NULL && sound_module->CacheSounds != NULL)
-    {
-        sound_module->CacheSounds(sounds, num_sounds);
-    }
 }
 
 void I_InitMusic(void)
@@ -390,125 +330,39 @@ void I_ShutdownMusic(void)
 
 void I_SetMusicVolume(int volume)
 {
-    if (music_module != NULL)
-    {
-        music_module->SetMusicVolume(volume);
-
-        if (music_packs_active && music_module != &music_pack_module)
-        {
-            music_pack_module.SetMusicVolume(volume);
-        }
-    }
 }
 
 void I_PauseSong(void)
 {
-    if (active_music_module != NULL)
-    {
-        active_music_module->PauseMusic();
-    }
 }
 
 void I_ResumeSong(void)
 {
-    if (active_music_module != NULL)
-    {
-        active_music_module->ResumeMusic();
-    }
 }
 
 void *I_RegisterSong(void *data, int len)
 {
-    // If the music pack module is active, check to see if there is a
-    // valid substitution for this track. If there is, we set the
-    // active_music_module pointer to the music pack module for the
-    // duration of this particular track.
-    if (music_packs_active)
-    {
-        void *handle;
-
-        handle = music_pack_module.RegisterSong(data, len);
-        if (handle != NULL)
-        {
-            active_music_module = &music_pack_module;
-            return handle;
-        }
-    }
-
-    // No substitution for this track, so use the main module.
-    active_music_module = music_module;
-    if (active_music_module != NULL)
-    {
-        return active_music_module->RegisterSong(data, len);
-    }
-    else
-    {
-        return NULL;
-    }
+    return NULL;
 }
 
 void I_UnRegisterSong(void *handle)
 {
-    if (active_music_module != NULL)
-    {
-        active_music_module->UnRegisterSong(handle);
-    }
 }
 
 void I_PlaySong(void *handle, boolean looping)
 {
-    if (active_music_module != NULL)
-    {
-        active_music_module->PlaySong(handle, looping);
-    }
 }
 
 void I_StopSong(void)
 {
-    if (active_music_module != NULL)
-    {
-        active_music_module->StopSong();
-    }
 }
 
 boolean I_MusicIsPlaying(void)
 {
-    if (active_music_module != NULL)
-    {
-        return active_music_module->MusicIsPlaying();
-    }
-    else
-    {
-        return false;
-    }
+    return false;
 }
 
 void I_BindSoundVariables(void)
 {
-    extern char *snd_dmxoption;
-    extern int use_libsamplerate;
-    extern float libsamplerate_scale;
-
-    M_BindIntVariable("snd_musicdevice",         &snd_musicdevice);
-    M_BindIntVariable("snd_sfxdevice",           &snd_sfxdevice);
-    M_BindIntVariable("snd_sbport",              &snd_sbport);
-    M_BindIntVariable("snd_sbirq",               &snd_sbirq);
-    M_BindIntVariable("snd_sbdma",               &snd_sbdma);
-    M_BindIntVariable("snd_mport",               &snd_mport);
-    M_BindIntVariable("snd_maxslicetime_ms",     &snd_maxslicetime_ms);
-    M_BindStringVariable("snd_musiccmd",         &snd_musiccmd);
-    M_BindStringVariable("snd_dmxoption",        &snd_dmxoption);
-    M_BindIntVariable("snd_samplerate",          &snd_samplerate);
-    M_BindIntVariable("snd_cachesize",           &snd_cachesize);
-    M_BindIntVariable("opl_io_port",             &opl_io_port);
-    M_BindIntVariable("snd_pitchshift",          &snd_pitchshift);
-
-    M_BindStringVariable("music_pack_path",      &music_pack_path);
-    M_BindStringVariable("timidity_cfg_path",    &timidity_cfg_path);
-    M_BindStringVariable("gus_patch_path",       &gus_patch_path);
-    M_BindIntVariable("gus_ram_kb",              &gus_ram_kb);
-
-    M_BindIntVariable("use_libsamplerate",       &use_libsamplerate);
-    M_BindFloatVariable("libsamplerate_scale",   &libsamplerate_scale);
 }
 
