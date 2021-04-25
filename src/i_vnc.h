@@ -50,7 +50,15 @@ typedef struct {
     // events into game key events
     boolean text_input;
 
-    // The palette to be pushed over with the next frame, 256*3 bytes
+    // Whether we're currently using true color. If so, then we don't discard
+    // the palette and use it to convert from our color space into the VNC
+    // client's preferred colorspace
+    boolean true_color;
+
+    // The data to send in a true-color frame, only allocated if true_color is toggled on
+    byte *color_frame;
+
+    // The palette to be pushed over with the next frame, 256*6 bytes
     byte *palette;
 
     // The last recorded positions of the mouse. Required since mouse events are relative.
@@ -64,12 +72,15 @@ typedef struct {
 // connection data within the server state record. 
 void VNC_Init(vnc_server_t* server, int width, int height);
 
+// Toggles text input, which includes more info when we generate key events
+void VNC_SetTextInput(vnc_server_t* server, boolean state);
+
 // Reads all the pending messages on the socket and processes them. This will fill
 // the client_packet with any leftover data that was not part of a complete packet.
 void VNC_PumpMessages(vnc_server_t* server);
 
 // Saves the current palette to be sent over before the next frame.
-void VNC_PreparePalette(vnc_server_t* server, byte* palette);
+void VNC_PreparePalette(vnc_server_t* server, rgb_t* palette);
 
 // Sends over the current frame of video data, if the client has requested it.
 void VNC_SendFrame(vnc_server_t* server, byte* frame);
