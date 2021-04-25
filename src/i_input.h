@@ -21,6 +21,7 @@
 #define __I_INPUT__
 
 #include "doomtype.h"
+#include "i_vnc.h"
 
 #define MAX_MOUSE_BUTTONS 8
 
