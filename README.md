@@ -36,7 +36,7 @@ we can use Doom's native palettes with it instead of 32-bit colors, but it's als
 zlib based and I had to add support for creating zlib frames without any underlying 
 compression (RFC 1950 and 1951 are your friends here).
 
-# Ugh! Why does only $KEY not work?
+# Ugh! Why does $KEY not work?
 
 Blame RFC 6143. It exposes keys in the form of keysyms instead of the scancodes
 that Doom is used to ingesting, so I had to add some mapping to get from the one
