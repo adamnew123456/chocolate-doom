@@ -23,6 +23,11 @@
 
 #include "doomtype.h"
 
+typedef enum {
+    VNC_RAW = 0,
+    VNC_TIGHT = 7,
+} vnc_encoding_t;
+
 typedef struct {
     // The file descriptor we actually send network data on, comes from
     // accept() on server socket. Once this connection closes we kill the 
@@ -32,10 +37,6 @@ typedef struct {
     // Whether the client has sent a framebuffer update request that we need to
     // honor when the next frame is drawn.
     boolean send_frame;
-
-    // The buffer that we use for storing server packets. Very large since its
-    // primary purpose is storing pixel data which is encoded in raw format.
-    byte server_packet[VNC_FRAME_SIZE];
 
     // The buffer that we use for receiving packets over the connection. This is
     // used to contain commands that we have received in part but have not gotten
@@ -50,13 +51,14 @@ typedef struct {
     // events into game key events
     boolean text_input;
 
-    // Whether we're currently using true color. If so, then we don't discard
-    // the palette and use it to convert from our color space into the VNC
-    // client's preferred colorspace
-    boolean true_color;
+    // The preferred encoding sent to us by the client. Note that this refers to
+    // the frame encoding and not the pixel encoding; we support only 32-bit
+    // little-endian true-color as a pixel encoding
+    vnc_encoding_t encoding;
 
-    // The data to send in a true-color frame, only allocated if true_color is toggled on
-    byte *color_frame;
+    // Where data is stored before being sent to the client, used for both control
+    // data and color data
+    byte *server_packet;
 
     // The palette to be pushed over with the next frame, 256*6 bytes
     byte *palette;

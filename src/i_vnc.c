@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <arpa/inet.h>
 #include <sys/time.h>
 #include <sys/socket.h>
@@ -43,7 +44,7 @@ static const char vnc_keysym_unshifted[] = {
     0, // .
     0, // /
     // Numerics are all their own lower casing
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     ';', // :
     0, // ;
     ',', // <
@@ -60,7 +61,7 @@ static const char vnc_keysym_unshifted[] = {
     '-', // _
     0, // `
     // Lower case alphabet
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     '[', // {
     '\\', // |
     ']', // }
@@ -116,7 +117,7 @@ static int ConsumeVNCMessage(vnc_server_t* server, int size)
         server->packet_cursor = 0;
         return 1;
     }
- 
+
     // *Hopefully* this is smart enough to figure out that it can safely copy
     // through the array backwards without having to use scratch space
     memmove(server->client_packet, server->client_packet + size, server->packet_cursor - size);
@@ -137,38 +138,18 @@ static int HandleVNCMessage(vnc_server_t *server, int* cursor_x, int* cursor_y, 
                 {
                     if (!true_color)
                     {
-                        if (px_size != 8)
-                        {
-                            printf("HandleVNCMessage: Unsupported pixel size in palette mode: %d\n", px_size);
-                            VNC_Exit(server);
-                            I_Quit();
-                            return;
-                        }
-
-                        printf("HandleVNCMessage: Using palettes\n");
-                        server->true_color = 0;
-                        if (server->color_frame)
-                        {
-                            free(server->color_frame);
-                            server->color_frame = NULL;
-                        }
+                      printf("HandleVNCMessage: Unsupported palette color mode\n");
+                      VNC_Exit(server);
+                      I_Quit();
+                      return 1;
                     }
-                    else
-                    {
-                        if (px_size != 32)
-                        {
-                            printf("HandleVNCMessage: Unsupported pixel size in true-color mode: %d\n", px_size);
-                            VNC_Exit(server);
-                            I_Quit();
-                            return;
-                        }
 
-                        printf("HandleVNCMessage: Using true color\n");
-                        server->true_color = 1;
-                        if (!server->color_frame)
-                        {
-                            server->color_frame = malloc(server->width * server->height * 32);
-                        }
+                    if (px_size != 32)
+                    {
+                        printf("HandleVNCMessage: Unsupported pixel size mode: %d\n", px_size);
+                        VNC_Exit(server);
+                        I_Quit();
+                        return 1;
                     }
 
                     return 1;
@@ -184,9 +165,36 @@ static int HandleVNCMessage(vnc_server_t *server, int* cursor_x, int* cursor_y, 
                 int encoding_count = (server->client_packet[2] << 8) | server->client_packet[3];
                 int expect_length = 4 + encoding_count * 4;
 
+                boolean contains_tight = false;
+                int encoding_offset = 4;
+                for (int i = 0; i < encoding_count; i++)
+                {
+                    int encoding =
+                        (server->client_packet[encoding_offset] << 24) |
+                        (server->client_packet[encoding_offset + 1] << 16) |
+                        (server->client_packet[encoding_offset + 2] << 8) |
+                        server->client_packet[encoding_offset + 3];
+
+                    encoding_offset += 4;
+                    if (encoding == VNC_TIGHT)
+                    {
+                        contains_tight = true;
+                        break;
+                    }
+                }
+
                 if (ConsumeVNCMessage(server, expect_length))
                 {
-                    printf("VNC_PumpMessage: Ignoring client encoding request\n");
+                    if (contains_tight)
+                    {
+                        printf("VNC_PumpMessage: Client supports Tight encoding, using it\n");
+                        server->encoding = VNC_TIGHT;
+                    }
+                    else
+                    {
+                        printf("VNC_PumpMessage: Client does not support Tight, using raw encoding\n");
+                        server->encoding = VNC_RAW;
+                    }
                     return 1;
                 }
             }
@@ -200,10 +208,10 @@ static int HandleVNCMessage(vnc_server_t *server, int* cursor_x, int* cursor_y, 
             }
             break;
 
-        case VNC_CLIENT_KEYEVENT: 
+        case VNC_CLIENT_KEYEVENT:
             {
                 byte is_keydown = server->client_packet[1];
-                int keysym = 
+                int keysym =
                     (server->client_packet[4] << 24) |
                     (server->client_packet[5] << 16) |
                     (server->client_packet[6] << 8) |
@@ -412,7 +420,7 @@ static int HandleVNCMessage(vnc_server_t *server, int* cursor_x, int* cursor_y, 
                             event.data3 = keysym;
                         }
                     }
-                    
+
                     D_PostEvent(&event);
                     return 1;
                 }
@@ -434,8 +442,8 @@ static int HandleVNCMessage(vnc_server_t *server, int* cursor_x, int* cursor_y, 
                 {
                     *cursor_x = x_pos;
                     *cursor_y = y_pos;
-                    *mouse_buttons = left_button 
-                        | (right_button << 1) 
+                    *mouse_buttons = left_button
+                        | (right_button << 1)
                         | (middle_button << 2)
                         | (scroll_up << 3)
                         | (scroll_down << 4);
@@ -453,10 +461,10 @@ static int HandleVNCMessage(vnc_server_t *server, int* cursor_x, int* cursor_y, 
                 // XXX: This could easily overfill our buffer if the user sends data longer than VNC_PACKET_SIZE
                 // The best we can hope for is that data greater than that has no control characters in it, so
                 // that we can drop the buffer repeatedly and then resync at some later point
-                int encoding_count = 
-                    (server->client_packet[4] << 24) | 
-                    (server->client_packet[5] << 16) | 
-                    (server->client_packet[6] << 8) | 
+                int encoding_count =
+                    (server->client_packet[4] << 24) |
+                    (server->client_packet[5] << 16) |
+                    (server->client_packet[6] << 8) |
                     server->client_packet[7];
 
                 int expect_length = 8 + encoding_count;
@@ -480,9 +488,9 @@ static int HandleVNCMessage(vnc_server_t *server, int* cursor_x, int* cursor_y, 
 void VNC_Init(vnc_server_t* server, int width, int height)
 {
     server->send_frame = false;
+    server->server_packet = malloc(width * height * 32); // Allocate enough to fit even raw pixel data
     server->text_input = false;
-    server->true_color = false;
-    server->color_frame = NULL;
+    server->encoding = VNC_RAW;
     server->palette = NULL;
     server->mouse_x = 0;
     server->mouse_y = 0;
@@ -545,7 +553,7 @@ void VNC_Init(vnc_server_t* server, int width, int height)
             goto client_abort;
         }
 
-        printf("VNC_Init: Got good client version (%12.s)\n", client_init_buffer);
+        printf("VNC_Init: Got good client version (%.11s)\n", client_init_buffer);
         // (1 security type; None)
         if (SendAll(server->peer, "\x01\x01", 2))
         {
@@ -593,11 +601,19 @@ void VNC_Init(vnc_server_t* server, int width, int height)
         server_init[1] = server->width & 0xff;
         server_init[2] = (server->height >> 8) & 0xff; // Framebuffer height
         server_init[3] = server->height & 0xff;
-        server_init[4] = 8; // Bits per pixel
-        server_init[5] = 8; // Depth
-        server_init[6] = 8; // Big-endian flag
-        server_init[7] = 0; // True color flag
-        // The rest of the pixel format is irrelevant since we're using palettes
+        server_init[4] = 32; // Bits per pixel
+        server_init[5] = 24; // Depth
+        server_init[6] = 0; // Big-endian flag
+        server_init[7] = 1; // True color flag
+        server_init[8] = 0; // Red scale
+        server_init[9] = 255;
+        server_init[10] = 0; // Green scale
+        server_init[11] = 255;
+        server_init[12] = 0; // Blue scale
+        server_init[13] = 255;
+        server_init[14] = 16; // Red shift
+        server_init[15] = 8; // Green shift
+        server_init[16] = 0; // Blue shift
         server_init[20] = 0; // Desktop name length
         server_init[21] = 0;
         server_init[22] = 0;
@@ -618,7 +634,7 @@ void VNC_Init(vnc_server_t* server, int width, int height)
 
         // We can't accept any clients beyond the first, so don't bother listening
         close(server_sock);
-        printf("VNC_Init: All done here, moving to the rest of the game\n");
+        printf("VNC_Init: All done here, starting up with default raw encoding\n");
         break;
 
 client_abort:
@@ -702,71 +718,25 @@ void VNC_PumpMessages(vnc_server_t* server)
 
 void VNC_PreparePalette(vnc_server_t* server, rgb_t* palette)
 {
-    printf("VNC_PumpMessages: Copying new palette\n");
     if (server->palette == NULL)
     {
         // The palette is usually function scoped and loaded from a cached lump, so
         // it's not guaranteed to be around later on
-        server->palette = malloc(server->width * server->height * 6);
+        server->palette = malloc(server->width * server->height * 3);
     }
 
     int offset = 0;
     for (int i = 0; i < 256; i++)
     {
         server->palette[offset++] = palette[i].r;
-        server->palette[offset++] = 0;
         server->palette[offset++] = palette[i].g;
-        server->palette[offset++] = 0;
         server->palette[offset++] = palette[i].b;
-        server->palette[offset++] = 0;
     }
 }
 
-void VNC_SendFrame(vnc_server_t* server, byte* frame)
+static void SendRawVNCFrame(vnc_server_t* server, byte* frame)
 {
-    if (!server->send_frame)
-    {
-        return;
-    }
-
-    if (!server->palette && server->true_color)
-    {
-        printf("VNC_PumpMessages: Deferring send in true-color until palette is availble\n");
-        return;
-    }
-
     int offset = 0;
-    if (server->palette && !server->true_color)
-    {
-        printf("VNC_PumpMessages: Sending palette\n");
-        server->server_packet[offset++] = VNC_SERVER_SETCOLORMAPENTRIES;
-        offset++; // Padding
-        server->server_packet[offset++] = 0; // Start updating the palette at offset 0 
-        server->server_packet[offset++] = 0;
-        server->server_packet[offset++] = 0;  // 255 total palette entries to write
-        server->server_packet[offset++] = 255;
-
-        if (SendAll(server->peer, server->server_packet, offset))
-        {
-            printf("VNC_SendFrame: palette send failure");
-            VNC_Exit(server);
-            I_Quit();
-            return;
-        }
-
-        if (SendAll(server->peer, server->palette, offset))
-        {
-            printf("VNC_SendFrame: palette send failure");
-            VNC_Exit(server);
-            I_Quit();
-            return;
-        }
-
-        free(server->palette);
-        server->palette = NULL;
-        offset = 0;
-    }
-
     server->server_packet[offset++] = VNC_SERVER_FRAMEBUFFERUPDATE;
     offset++; // Padding
     server->server_packet[offset++] = 0; // Number of rectangles worth of pixel data, we only ever send the whole screen
@@ -782,7 +752,7 @@ void VNC_SendFrame(vnc_server_t* server, byte* frame)
     server->server_packet[offset++] = 0; // Raw encoding type
     server->server_packet[offset++] = 0;
     server->server_packet[offset++] = 0;
-    server->server_packet[offset++] = 0;
+    server->server_packet[offset++] = VNC_RAW;
     if (SendAll(server->peer, server->server_packet, offset))
     {
         VNC_Exit(server);
@@ -790,34 +760,235 @@ void VNC_SendFrame(vnc_server_t* server, byte* frame)
         return;
     }
 
-    if (server->true_color)
+    offset = 0;
+    for (int i = 0; i < server->width * server->height; i++)
     {
-        int offset = 0;
-        for (int i = 0; i < server->width * server->height; i++)
-        {
-            server->color_frame[offset++] = server->palette[frame[i] * 6 + 4];
-            server->color_frame[offset++] = server->palette[frame[i] * 6 + 2];
-            server->color_frame[offset++] = server->palette[frame[i] * 6];
-            server->color_frame[offset++] = 0;
-        }
+        server->server_packet[offset++] = server->palette[frame[i] * 3 + 2];
+        server->server_packet[offset++] = server->palette[frame[i] * 3 + 1];
+        server->server_packet[offset++] = server->palette[frame[i] * 3];
+        server->server_packet[offset++] = 0;
+    }
 
-        if (SendAll(server->peer, server->color_frame, offset))
-        {
-            printf("VNC_SendFrame: framebuffer send failure");
-            VNC_Exit(server);
-            I_Quit();
-            return;
-        }
+    if (SendAll(server->peer, server->server_packet, offset))
+    {
+        printf("SendRawVNCFrame: framebuffer send failure");
+        VNC_Exit(server);
+        I_Quit();
+        return;
+    }
+}
+
+static void SendTightVNCFrame(vnc_server_t* server, byte* frame)
+{
+    int offset = 0;
+    server->server_packet[offset++] = VNC_SERVER_FRAMEBUFFERUPDATE;
+    offset++; // Padding
+    server->server_packet[offset++] = 0; // Number of rectangles worth of pixel data, we only ever send the whole screen
+    server->server_packet[offset++] = 1;
+    server->server_packet[offset++] = 0; // X coordinate
+    server->server_packet[offset++] = 0;
+    server->server_packet[offset++] = 0; // Y coordinate
+    server->server_packet[offset++] = 0;
+    server->server_packet[offset++] = (server->width >> 8); // Width
+    server->server_packet[offset++] = server->width & 0xff;
+    server->server_packet[offset++] = (server->height >> 8); // Height
+    server->server_packet[offset++] = server->height & 0xff;
+    server->server_packet[offset++] = 0; // Tight encoding type
+    server->server_packet[offset++] = 0;
+    server->server_packet[offset++] = 0;
+    server->server_packet[offset++] = VNC_TIGHT;
+    if (SendAll(server->peer, server->server_packet, offset))
+    {
+        VNC_Exit(server);
+        I_Quit();
+        return;
+    }
+
+    offset = 0;
+
+    // Tight encoding is a compressed encoding that supports various options,
+    // including JPEG encoding, palettes and gradients. The only thing we care
+    // about here is palette support; Tight encoding supports palettes of 256
+    // colors which is exactly the size we need to use the frame data with no
+    // modification. See github.com/rfbproto/rfbproto for documentation.
+    // RFC 6143 doesn't describe this encoding.
+    //
+    // Tight is also a zlib-compressed encoding, which is less useful because
+    // I don't want to add zlib as a dependency. We can avoid actually having
+    // to use zlib by abusing a quirk of the RFC 1951 format: it supports
+    // blocks of data that are not compressed, and sets no limit on how they're
+    // used.
+    //
+    // Without compression the main complexity here is framing things. We have
+    // to use the RFC 1950 framing at the top-level, which looks like this:
+    //
+    // byte    0     1    ...        n+1 n+2 n+3 n+4
+    //      | CMF | FLG | <data>  |      ADLER32
+    //
+    // Where our CMF is going to be (01111000 - DEFLATE with 32K window),
+    // our FLG is going to be (0000001 - no dictionary, lowest compression level,
+    // and some extra juice to get the right flag check value) and the ADLER32
+    // checksum which is computed as follows over the frame data and stored in
+    // big-endian byte order:
+    //
+    //   s2 = (s2 + byte[i]) % 65521
+    //   s1 = (s1 + s2) % 65521
+    //   ...
+    //   ADLER32 = s2 << 16 | s1
+    //
+    // <data> is also composed of uncompressed DEFLATE blocks, which look like
+    // this:
+    //        0        1 2      3 4
+    //   | 00000000 | LENGTH | NLENGTH | <framedata>
+    //
+    // The first byte stores the block header (here, it's not the last block and
+    // has type 0), then the length (big-endian I assume) and the bitwise negation
+    // of the length.
+    //
+    // That continues until the last block, which has its first bit set to indicate
+    // that it's the last one in the stream.
+    //
+    // The Tight protocol itself is reasonably simple if you ignore the need to
+    // compress it. We can fit the whole rectangle into a single Tight block since
+    // we're never transmitting anything close to its limit (2048x2048).
+
+    // We don't care about compression control, just reset stream 0 and always use
+    // stream 0. Also, always use basic compression which contains pixel data.
+    server->server_packet[offset++] = (1 << 6) | 1;
+
+    // Configure the palette filter and send the palette data
+    server->server_packet[offset++] = 1;
+
+    // 256 total colors, followed by the colors themselves
+    server->server_packet[offset++] = 255;
+    int palette_pos = 0;
+    for (int i = 0; i < 256; i++)
+    {
+        server->server_packet[offset++] = server->palette[palette_pos++]; // Red
+        server->server_packet[offset++] = server->palette[palette_pos++]; // Green
+        server->server_packet[offset++] = server->palette[palette_pos++]; // Blue
+    }
+
+    // Figure out how much data we're going to need to emulate the ZLIB stream, and
+    // then pack that into the Tight compact representation. We know that we'll need
+    // 6 bytes for the ZLIB framing, and then 5 bytes for each 64K block of palette
+    // indices (rounding up)
+    //
+    // Ideally we could just checkpoint the output here and come back to it, but we
+    // can't because the size itself is variable width and we have to know how many
+    // bytes it would take up in order to skip it
+    int zlib_data_size = 6;
+    int frame_data_size = server->width * server->height;
+    int zlib_frames = frame_data_size / 0xffff;
+    if (zlib_frames * 0xffff < frame_data_size)
+    {
+        zlib_frames++;
+    }
+
+    zlib_data_size += frame_data_size + 5 * zlib_frames;
+    if (zlib_data_size < 0x80)
+    {
+        server->server_packet[offset++] = zlib_data_size;
+    }
+    else if (zlib_data_size < 0x4000)
+    {
+        server->server_packet[offset++] = (1 << 7) | (zlib_data_size & 0x7f);
+        server->server_packet[offset++] = (zlib_data_size >> 7) & 0x7f;
     }
     else
     {
-        if (SendAll(server->peer, frame, offset))
+        server->server_packet[offset++] = (1 << 7) | (zlib_data_size & 0x7f);
+        server->server_packet[offset++] = (1 << 7) | ((zlib_data_size >> 7) & 0x7f);
+        server->server_packet[offset++] = (zlib_data_size >> 14) & 0xff;
+    }
+
+    int zlib_data_start = offset;
+
+    // Finally, write out our mock zlib data and compute the checksum as we do
+    int adler_s1 = 1;
+    int adler_s2 = 0;
+    server->server_packet[offset++] = (1 << 6) | (1 << 5) | (1 << 4) | (1 << 3);
+    server->server_packet[offset++] = 1;
+
+    int data_left = frame_data_size;
+    int zlib_block_capacity = 0;
+    for (int i = 0; i < frame_data_size; i++)
+    {
+        if (zlib_block_capacity == 0)
         {
-            printf("VNC_SendFrame: framebuffer send failure");
-            VNC_Exit(server);
-            I_Quit();
-            return;
+            zlib_block_capacity = 0xffff;
+            if (data_left <= 0xffff)
+            {
+                int data_left_hi = (data_left >> 8) & 0xff;
+                int data_left_lo = data_left & 0xff;
+                server->server_packet[offset++] = 1;
+                server->server_packet[offset++] = data_left_lo;
+                server->server_packet[offset++] = data_left_hi;
+                server->server_packet[offset++] = ~data_left_lo;
+                server->server_packet[offset++] = ~data_left_hi;
+            }
+            else
+            {
+                server->server_packet[offset++] = 0;
+                server->server_packet[offset++] = 0xff;
+                server->server_packet[offset++] = 0xff;
+                server->server_packet[offset++] = 0;
+                server->server_packet[offset++] = 0;
+            }
         }
+
+        adler_s1 += frame[i];
+        if (adler_s1 >= 65521)
+        {
+            adler_s1 -= 65521;
+        }
+
+        adler_s2 += adler_s1;
+        if (adler_s2 >= 65521)
+        {
+            adler_s2 -= 65521;
+        }
+
+        server->server_packet[offset++] = frame[i];
+        zlib_block_capacity--;
+        data_left--;
+    }
+
+    server->server_packet[offset++] = (adler_s2 >> 8) & 0xff;
+    server->server_packet[offset++] = adler_s2 & 0xff;
+    server->server_packet[offset++] = (adler_s1 >> 8) & 0xff;
+    server->server_packet[offset++] = adler_s1 & 0xff;
+
+    if (SendAll(server->peer, server->server_packet, offset))
+    {
+        printf("SendTightVNCFrame: framebuffer send failure");
+        VNC_Exit(server);
+        I_Quit();
+        return;
+    }
+}
+
+void VNC_SendFrame(vnc_server_t* server, byte* frame)
+{
+    if (!server->send_frame)
+    {
+        return;
+    }
+
+    if (!server->palette)
+    {
+        printf("VNC_PumpMessages: Deferring send until palette is availble\n");
+        return;
+    }
+
+    switch (server->encoding)
+    {
+        case VNC_RAW:
+            SendRawVNCFrame(server, frame);
+            break;
+        case VNC_TIGHT:
+            SendTightVNCFrame(server, frame);
+            break;
     }
 
     server->send_frame = 0;
@@ -831,10 +1002,10 @@ void VNC_Exit(vnc_server_t* server)
         server->palette = NULL;
     }
 
-    if (server->color_frame != NULL)
+    if (server->server_packet != NULL)
     {
-        free(server->color_frame);
-        server->color_frame = NULL;
+        free(server->server_packet);
+        server->server_packet = NULL;
     }
 
     close(server->peer);
