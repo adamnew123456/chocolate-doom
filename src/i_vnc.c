@@ -480,7 +480,6 @@ static int HandleVNCMessage(vnc_server_t *server, int message_scan_pos, int* cur
                 int expect_length = 8 + encoding_count;
                 if (data_left >= expect_length)
                 {
-                    printf("%d[%d | %d | %d]\n", packet_base[0], server->packet_cursor, message_scan_pos, data_left);
                     return message_scan_pos + expect_length;
                 }
             }
