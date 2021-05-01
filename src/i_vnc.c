@@ -199,6 +199,7 @@ static int HandleVNCMessage(vnc_server_t *server, int message_scan_pos, int* cur
                 {
                     if (contains_tight)
                     {
+                        printf("HandleVNCMessage: Moving to Tight encoding at client request\n");
                         server->encoding = VNC_TIGHT;
                     }
                     else
