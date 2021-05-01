@@ -119,43 +119,42 @@ static int RecvAll(int sock, byte* buffer, int size)
     return 0;
 }
 
-static int ConsumeVNCMessage(vnc_server_t* server, int size)
+static int FinalizeVNCMessages(vnc_server_t *server, int offset)
 {
-    if (server->packet_cursor < size)
+    byte* leftover_data = server->client_packet + offset;
+    int leftover_size = server->packet_cursor - offset;
+
+    if (leftover_size > 0)
     {
-        return 0;
+        // *Hopefully* this is smart enough to figure out that it can safely copy
+        // through the array backwards without having to use scratch space
+        memmove(server->client_packet, leftover_data, leftover_size);
     }
 
-    if (server->packet_cursor == size)
-    {
-        server->packet_cursor = 0;
-        return 1;
-    }
-
-    // *Hopefully* this is smart enough to figure out that it can safely copy
-    // through the array backwards without having to use scratch space
-    memmove(server->client_packet, server->client_packet + size, server->packet_cursor - size);
-    server->packet_cursor -= size;
-    return 1;
+    server->packet_cursor = leftover_size;
 }
 
-static int HandleVNCMessage(vnc_server_t *server, int* cursor_x, int* cursor_y, int* mouse_buttons)
+static int HandleVNCMessage(vnc_server_t *server, int message_scan_pos, int* cursor_x, int* cursor_y, int* mouse_buttons)
 {
-    switch (server->client_packet[0])
+    byte* packet_base = server->client_packet + message_scan_pos;
+    int data_left = server->packet_cursor - message_scan_pos;
+    if (data_left == 0) return -1;
+
+    switch (packet_base[0])
     {
         case VNC_CLIENT_SETPIXELFORMAT:
             {
-                byte px_size = server->client_packet[4];
-                byte true_color = server->client_packet[7];
+                byte px_size = packet_base[4];
+                byte true_color = packet_base[7];
 
-                if (ConsumeVNCMessage(server, 20))
+                if (data_left >= 20)
                 {
                     if (!true_color)
                     {
                       printf("HandleVNCMessage: Unsupported palette color mode\n");
                       VNC_Exit(server);
                       I_Quit();
-                      return 1;
+                      return -1;
                     }
 
                     if (px_size != 32)
@@ -163,20 +162,19 @@ static int HandleVNCMessage(vnc_server_t *server, int* cursor_x, int* cursor_y, 
                         printf("HandleVNCMessage: Unsupported pixel size mode: %d\n", px_size);
                         VNC_Exit(server);
                         I_Quit();
-                        return 1;
+                        return -1;
                     }
 
-                    return 1;
+                    return message_scan_pos + 20;
                 }
             }
             break;
 
         case VNC_CLIENT_SETENCODINGS:
-            // Same for the encoding, we just use raw for the moment
-            if (server->packet_cursor >= 4)
+            if (server->packet_cursor - message_scan_pos >= 4)
             {
                 // We can figure out the true size by looking at the encoding count
-                int encoding_count = (server->client_packet[2] << 8) | server->client_packet[3];
+                int encoding_count = (packet_base[2] << 8) | packet_base[3];
                 int expect_length = 4 + encoding_count * 4;
 
                 boolean contains_tight = false;
@@ -184,10 +182,10 @@ static int HandleVNCMessage(vnc_server_t *server, int* cursor_x, int* cursor_y, 
                 for (int i = 0; i < encoding_count; i++)
                 {
                     int encoding =
-                        (server->client_packet[encoding_offset] << 24) |
-                        (server->client_packet[encoding_offset + 1] << 16) |
-                        (server->client_packet[encoding_offset + 2] << 8) |
-                        server->client_packet[encoding_offset + 3];
+                        (packet_base[encoding_offset] << 24) |
+                        (packet_base[encoding_offset + 1] << 16) |
+                        (packet_base[encoding_offset + 2] << 8) |
+                        packet_base[encoding_offset + 3];
 
                     encoding_offset += 4;
                     if (encoding == VNC_TIGHT)
@@ -197,47 +195,45 @@ static int HandleVNCMessage(vnc_server_t *server, int* cursor_x, int* cursor_y, 
                     }
                 }
 
-                if (ConsumeVNCMessage(server, expect_length))
+                if (data_left >= expect_length)
                 {
                     if (contains_tight)
                     {
-                        printf("VNC_PumpMessage: Client supports Tight encoding, using it\n");
                         server->encoding = VNC_TIGHT;
                     }
                     else
                     {
-                        printf("VNC_PumpMessage: Client does not support Tight, using raw encoding\n");
                         server->encoding = VNC_RAW;
                     }
-                    return 1;
+
+                    return message_scan_pos + expect_length;
                 }
             }
             break;
 
         case VNC_CLIENT_FRAMEBUFFERUPDATEREQUEST:
-            if (ConsumeVNCMessage(server, 10))
+            if (data_left >= 10)
             {
                 server->send_frame = 1;
-                return 1;
+                return message_scan_pos + 10;
             }
             break;
 
         case VNC_CLIENT_KEYEVENT:
             {
-                byte is_keydown = server->client_packet[1];
+                byte is_keydown = packet_base[1];
                 int keysym =
-                    (server->client_packet[4] << 24) |
-                    (server->client_packet[5] << 16) |
-                    (server->client_packet[6] << 8) |
-                    server->client_packet[7];
+                    (packet_base[4] << 24) |
+                    (packet_base[5] << 16) |
+                    (packet_base[6] << 8) |
+                    packet_base[7];
                 boolean is_key_known = keysym <= 0x7f;
 
-                if (ConsumeVNCMessage(server, 8))
+                if (data_left >= 8)
                 {
                     event_t event;
                     event.data2 = 0;
                     event.data3 = 0;
-
                     event.type = is_keydown ? ev_keydown : ev_keyup;
 
                     // According to the transforms done by the SDL code
@@ -412,7 +408,7 @@ static int HandleVNCMessage(vnc_server_t *server, int* cursor_x, int* cursor_y, 
                     // sending these along.
                     if (!is_key_known)
                     {
-                        return 1;
+                      return message_scan_pos + 8;
                     }
 
                     int keysym_lowercase = keysym;
@@ -436,7 +432,7 @@ static int HandleVNCMessage(vnc_server_t *server, int* cursor_x, int* cursor_y, 
                     }
 
                     D_PostEvent(&event);
-                    return 1;
+                    return message_scan_pos + 8;
                 }
 
                 break;
@@ -444,15 +440,15 @@ static int HandleVNCMessage(vnc_server_t *server, int* cursor_x, int* cursor_y, 
 
         case VNC_CLIENT_POINTEREVENT:
             {
-                int x_pos = (server->client_packet[2] << 8) | server->client_packet[3];
-                int y_pos = (server->client_packet[4] << 8) | server->client_packet[5];
-                int left_button = server->client_packet[1] & 0x1;
-                int right_button = server->client_packet[1] & 0x4;
-                int middle_button = server->client_packet[1] & 0x2;
-                int scroll_up = server->client_packet[1] & 0x8;
-                int scroll_down = server->client_packet[1] & 0x10;
+                int x_pos = (packet_base[2] << 8) | packet_base[3];
+                int y_pos = (packet_base[4] << 8) | packet_base[5];
+                int left_button = packet_base[1] & 0x1;
+                int right_button = packet_base[1] & 0x4;
+                int middle_button = packet_base[1] & 0x2;
+                int scroll_up = packet_base[1] & 0x8;
+                int scroll_down = packet_base[1] & 0x10;
 
-                if (ConsumeVNCMessage(server, 6))
+                if (data_left >= 6)
                 {
                     *cursor_x = x_pos;
                     *cursor_y = y_pos;
@@ -463,40 +459,39 @@ static int HandleVNCMessage(vnc_server_t *server, int* cursor_x, int* cursor_y, 
                         | (scroll_down << 4);
 
                     // Defer this event so we can collect all mouse packets into a single event
-                    return 1;
+                    return message_scan_pos + 6;
                 }
                 break;
             }
 
         case VNC_CLIENT_CLIENTCUTTEXT:
             // Length is dependent on data here, like SETENCODING
-            if (server->packet_cursor >= 8)
+            if (data_left >= 8)
             {
                 // XXX: This could easily overfill our buffer if the user sends data longer than VNC_PACKET_SIZE
                 // The best we can hope for is that data greater than that has no control characters in it, so
                 // that we can drop the buffer repeatedly and then resync at some later point
                 int encoding_count =
-                    (server->client_packet[4] << 24) |
-                    (server->client_packet[5] << 16) |
-                    (server->client_packet[6] << 8) |
-                    server->client_packet[7];
+                    (packet_base[4] << 24) |
+                    (packet_base[5] << 16) |
+                    (packet_base[6] << 8) |
+                    packet_base[7];
 
                 int expect_length = 8 + encoding_count;
-                if (ConsumeVNCMessage(server, expect_length))
+                if (data_left >= expect_length)
                 {
-                    printf("VNC_PumpMessage: Ignoring client clipboard data\n");
-                    return 1;
+                    printf("%d[%d | %d | %d]\n", packet_base[0], server->packet_cursor, message_scan_pos, data_left);
+                    return message_scan_pos + expect_length;
                 }
             }
 
         default:
             // We couldn't understand the message, so just drop the buffer and
             // hopefully we'll resync at some point
-            server->packet_cursor = 0;
-            break;
+            return -2;
     }
 
-    return 0;
+    return -1;
 }
 
 void VNC_Init(vnc_server_t* server, int width, int height)
@@ -515,13 +510,13 @@ void VNC_Init(vnc_server_t* server, int width, int height)
     // user knows we're waiting for something and not just idling.
     int server_sock = socket(AF_INET, SOCK_STREAM, 0);
 
-    struct sockaddr_in listen_addr;
+    struct sockaddr_in listen_addr = {0};
     listen_addr.sin_family = AF_INET;
     listen_addr.sin_port = htons(5902);
     listen_addr.sin_addr.s_addr = 0;
 
-    struct sockaddr_in peer_addr;
-    socklen_t peer_addrlen;
+    struct sockaddr_in peer_addr = {0};
+    socklen_t peer_addrlen = {0};
 
     bind(server_sock, (const struct sockaddr*) &listen_addr, sizeof(struct sockaddr_in));
     listen(server_sock, 1);
@@ -665,7 +660,7 @@ void VNC_SetTextInput(vnc_server_t* server, boolean state)
 
 void VNC_PumpMessages(vnc_server_t* server)
 {
-    fd_set readers, writers, errorers;
+    fd_set readers = {0};
 
     // Return immediately, only pull the data that's buffered
     int events = 0;
@@ -680,11 +675,9 @@ void VNC_PumpMessages(vnc_server_t* server)
         timeout.tv_usec = 0;
 
         FD_ZERO(&readers);
-        FD_ZERO(&writers);
-        FD_ZERO(&errorers);
         FD_SET(server->peer, &readers);
 
-        events = select(server->peer + 1, &readers, &writers, &errorers, &timeout);
+        events = select(server->peer + 1, &readers, NULL, NULL, &timeout);
         if (events == -1)
         {
             printf("VNC_PumpMessages: Could not poll (%s)\n", strerror(errno));
@@ -706,12 +699,22 @@ void VNC_PumpMessages(vnc_server_t* server)
             }
 
             server->packet_cursor += chunk;
-            while (server->packet_cursor > 0)
+
+            int old_scan_pos = 0;
+            int message_scan_pos = 0;
+            while (message_scan_pos >= 0)
             {
-                if (!HandleVNCMessage(server, &new_mouse_x, &new_mouse_y, &mouse_buttons))
-                {
-                    break;
-                }
+              old_scan_pos = message_scan_pos;
+              message_scan_pos = HandleVNCMessage(server, message_scan_pos, &new_mouse_x, &new_mouse_y, &mouse_buttons);
+            }
+
+            if (message_scan_pos == -2)
+            {
+                printf("VNC_PumpMessages: Flushing buffer after unknown message\n");
+            }
+            else
+            {
+                FinalizeVNCMessages(server, old_scan_pos);
             }
         }
     } while (events == 1);
@@ -734,11 +737,11 @@ void VNC_PreparePalette(vnc_server_t* server, rgb_t* palette)
 {
     if (server->palette == NULL)
     {
-        // The palette is usually function scoped and loaded from a cached lump, so
-        // it's not guaranteed to be around later on
         server->palette = malloc(server->width * server->height * 3);
     }
 
+    // The palette is usually function scoped and loaded from a cached lump, so
+    // it's not guaranteed to be around later on. Make sure we copy it.
     int offset = 0;
     for (int i = 0; i < 256; i++)
     {
@@ -878,6 +881,8 @@ static void SendTightVNCFrame(vnc_server_t* server, byte* frame)
     int palette_pos = 0;
     for (int i = 0; i < 256; i++)
     {
+        // Note that these are not endian-adjusted like in raw encoding, Tight
+        // specifies that RGB is packed in this order
         server->server_packet[offset++] = server->palette[palette_pos++]; // Red
         server->server_packet[offset++] = server->palette[palette_pos++]; // Green
         server->server_packet[offset++] = server->palette[palette_pos++]; // Blue
@@ -893,11 +898,7 @@ static void SendTightVNCFrame(vnc_server_t* server, byte* frame)
     // bytes it would take up in order to skip it
     int zlib_data_size = 6;
     int frame_data_size = server->width * server->height;
-    int zlib_frames = frame_data_size / 0xffff;
-    if (zlib_frames * 0xffff < frame_data_size)
-    {
-        zlib_frames++;
-    }
+    int zlib_frames = (frame_data_size >> 16) + 1;
 
     zlib_data_size += frame_data_size + 5 * zlib_frames;
     if (zlib_data_size < 0x80)
@@ -921,7 +922,9 @@ static void SendTightVNCFrame(vnc_server_t* server, byte* frame)
     // Finally, write out our mock zlib data and compute the checksum as we do
     int adler_s1 = 1;
     int adler_s2 = 0;
+    // DEFLATE compression method with a window size of 9 (?)
     server->server_packet[offset++] = (1 << 6) | (1 << 5) | (1 << 4) | (1 << 3);
+    // Check bits along with no dictionary and low compression level
     server->server_packet[offset++] = 1;
 
     int data_left = frame_data_size;
